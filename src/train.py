@@ -9,6 +9,16 @@ from torch import nn
 from torch.optim import Adam
 from tqdm import tqdm
 
+
+from src.uncertainty.mc_dropout import mc_dropout_predict_proba
+from src.evaluation.abstention import risk_coverage_curve, coverage_at_accuracy
+from src.evaluation.plots import plot_risk_coverage
+
+from src.data.svhn import get_svhn_loader
+from src.evaluation.ood import ood_metrics
+from src.evaluation.ood_plots import plot_ood_hist, plot_roc_curve
+
+
 from src.utils.seed import set_seed
 from src.utils.config import load_yaml, get
 from src.data.cifar10 import get_cifar10_loaders
@@ -83,6 +93,9 @@ def main():
     lr = float(get(cfg, "train.lr", 1e-3))
     wd = float(get(cfg, "train.weight_decay", 5e-4))
     device = pick_device(get(cfg, "train.device", "auto"))
+    unc_method = get(cfg, "uncertainty.method", None)
+    n_passes = int(get(cfg, "uncertainty.n_passes", 20))
+    abst_metric = get(cfg, "uncertainty.abstain.metric", "predictive_entropy")
 
     # ---------------- Output ----------------
     run_root = get(cfg, "output.run_dir", "experiments/runs")
@@ -129,10 +142,100 @@ def main():
         with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:
             json.dump(history, f, indent=2)
 
-    # ---------------- Calibration diagnostics ----------------
-    probs, labels = predict_proba(model, val_loader, device=device)
-    conf = probs.max(axis=1)
+       # ---------------- Prediction for calibration/uncertainty ----------------
+    if unc_method == "mc_dropout":
+        probs, labels, extras = mc_dropout_predict_proba(
+            model, val_loader, device=device, n_passes=n_passes
+        )
+        abstain_score = extras.get(abst_metric)
+        higher_means_more_confident = (abst_metric == "max_prob")
 
+        # ---------------- OOD evaluation (optional) ----------------
+        ood_enabled = bool(get(cfg, "ood.enabled", False))
+        if ood_enabled:
+            ood_data_dir = get(cfg, "ood.data_dir", "data")
+            ood_dataset = get(cfg, "ood.dataset", "svhn")
+
+            if ood_dataset.lower() != "svhn":
+                raise ValueError("Only SVHN OOD is implemented right now.")
+
+            ood_loader = get_svhn_loader(
+                data_dir=ood_data_dir,
+                batch_size=batch_size,
+                num_workers=num_workers,
+            )
+
+            # Get OOD uncertainty scores (predictive entropy by default)
+            ood_probs, _, ood_extras = mc_dropout_predict_proba(
+                model, ood_loader, device=device, n_passes=n_passes
+            )
+
+            id_unc = extras["predictive_entropy"]
+            ood_unc = ood_extras["predictive_entropy"]
+
+            metrics = ood_metrics(id_unc, ood_unc)
+
+            with open(os.path.join(run_dir, "ood_auroc.json"), "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2)
+
+            plot_ood_hist(
+                id_unc,
+                ood_unc,
+                os.path.join(run_dir, "ood_score_hist.png"),
+                title="OOD Detection via Predictive Entropy (MC Dropout)"
+            )
+
+            import numpy as _np
+            plot_roc_curve(
+                _np.array(metrics["fpr"], dtype=float),
+                _np.array(metrics["tpr"], dtype=float),
+                os.path.join(run_dir, "ood_roc_curve.png"),
+                title=f"OOD ROC Curve (AUROC={metrics['auroc']:.3f})"
+            )
+
+            print(f"✅ OOD AUROC (entropy, CIFAR10 vs SVHN): {metrics['auroc']:.4f}")
+
+
+        # Save uncertainty summary
+        summary = {
+            "method": "mc_dropout",
+            "n_passes": n_passes,
+            "mean_max_prob": float(extras["max_prob"].mean()),
+            "mean_predictive_entropy": float(extras["predictive_entropy"].mean()),
+            "abstain_metric": abst_metric,
+        }
+        with open(os.path.join(run_dir, "uncertainty_summary.json"), "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+
+        # Abstention evaluation
+        curve = risk_coverage_curve(
+            probs=probs,
+            labels=labels,
+            abstain_score=abstain_score,
+            higher_means_more_confident=higher_means_more_confident,
+            n_points=60,
+        )
+        plot_risk_coverage(curve, os.path.join(run_dir, "risk_coverage_curve.png"),
+                           title=f"Risk-Coverage ({abst_metric})")
+
+        cov95, acc95 = coverage_at_accuracy(
+            probs=probs,
+            labels=labels,
+            abstain_score=abstain_score,
+            higher_means_more_confident=higher_means_more_confident,
+            target_accuracy=0.95,
+        )
+        with open(os.path.join(run_dir, "abstention_metrics.json"), "w", encoding="utf-8") as f:
+            json.dump({"coverage_at_95_acc": cov95, "achieved_accuracy": acc95}, f, indent=2)
+
+        print(f"✅ Abstention: coverage@95%acc = {cov95:.3f} (achieved acc {acc95:.3f})")
+
+    else:
+        probs, labels = predict_proba(model, val_loader, device=device)
+        abstain_score = probs.max(axis=1)  # default confidence
+
+    # ---------------- Calibration diagnostics ----------------
+    conf = probs.max(axis=1)
     ece, details = compute_ece(probs, labels, n_bins=15)
 
     with open(os.path.join(run_dir, "ece.json"), "w", encoding="utf-8") as f:
@@ -141,17 +244,18 @@ def main():
     plot_confidence_hist(
         conf,
         os.path.join(run_dir, "confidence_hist.png"),
-        title="Baseline Confidence Histogram",
+        title="Confidence Histogram",
     )
 
     plot_reliability_diagram(
         details,
         os.path.join(run_dir, "reliability_diagram.png"),
-        title="Baseline Reliability Diagram",
+        title="Reliability Diagram",
     )
 
     print(f"✅ ECE: {ece:.4f}")
-    print(f"✅ Saved calibration plots in: {run_dir}")
+    print(f"✅ Saved evaluation artifacts in: {run_dir}")
+
 
     # ---------------- Save checkpoint ----------------
     ckpt_path = os.path.join(run_dir, "model.pt")
