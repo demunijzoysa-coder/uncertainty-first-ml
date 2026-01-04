@@ -213,8 +213,27 @@ data/
 # Demo checkpoints (downloaded at runtime)
 demo/checkpoints/*.zip
 
-<<<<<<< HEAD
-=======
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Runs / artifacts
+experiments/runs/
+
+# Demo checkpoints (downloaded at runtime)
+demo/checkpoints/*.zip
+demo/checkpoints/ensemble/
+
 
 # Demo checkpoints (downloaded at runtime)
 demo/checkpoints/*.zip

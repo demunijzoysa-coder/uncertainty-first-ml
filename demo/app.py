@@ -1,17 +1,15 @@
 import sys
 from pathlib import Path
+
 # Add project root to Python path (Streamlit fix)
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
-
 
 import streamlit as st
 import torch
 from PIL import Image
 
 from demo.utils import (
-
- 
     CIFAR10_CLASSES,
     load_ensemble,
     preprocess_image,
@@ -31,13 +29,31 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ---- Load ensemble once ----
 @st.cache_resource
 def load_models():
-   return load_ensemble(
-    checkpoint_dir="demo/checkpoints/ensemble",
-    device=device,
-)
+    # Portable path inside repo (works on Streamlit Cloud)
+    return load_ensemble(
+        checkpoint_dir="demo/checkpoints/ensemble",
+        device=device,
+    )
 
+# Load models with user-friendly error handling (prevents redacted traceback pain)
+with st.spinner("Loading ensemble checkpoints (first run may download files)..."):
+    try:
+        models = load_models()
+    except Exception as e:
+        st.error("❌ Failed to load model checkpoints.")
+        st.write(
+            "This usually happens on Streamlit Cloud when checkpoints are missing or the "
+            "**GitHub Release download URL** is not set correctly."
+        )
+        st.write("### Fix checklist")
+        st.write("- Ensure `demo/utils.py` has a valid `ENSEMBLE_ZIP_URL` (GitHub Releases direct download link).")
+        st.write("- Ensure the app loads from `demo/checkpoints/ensemble` (portable path).")
+        st.write("- After updating, **commit + push**, then **Reboot app** on Streamlit Cloud.")
+        st.write("### Error details (for debugging)")
+        st.code(str(e))
+        st.stop()
 
-models = load_models()
+st.success("✅ Model loaded. Upload an image to test uncertainty + abstention.")
 
 # ---- Upload image ----
 uploaded = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
@@ -55,8 +71,14 @@ if uploaded:
     st.write(f"**Uncertainty (entropy):** {entropy:.3f}")
 
     # ---- Abstention rule ----
-    THRESHOLD = 1.2  # same logic as training
+    THRESHOLD = 1.2  # tune later; same as config logic
+    st.subheader("Decision")
+
     if entropy > THRESHOLD:
-        st.error("❌ I DON'T KNOW\n\nReason: High predictive uncertainty")
+        st.error("❌ I DON'T KNOW")
+        st.caption("Reason: High predictive uncertainty (predictive entropy above threshold).")
     else:
-        st.success("✅ ANSWER\n\nModel is confident")
+        st.success("✅ ANSWER")
+        st.caption("Reason: Predictive entropy is low, model is confident enough.")
+else:
+    st.info("Upload an image to see prediction + uncertainty + abstention behavior.")
