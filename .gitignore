@@ -213,3 +213,10 @@ data/
 # Demo checkpoints (downloaded at runtime)
 demo/checkpoints/*.zip
 
+<<<<<<< HEAD
+=======
+
+# Demo checkpoints (downloaded at runtime)
+demo/checkpoints/*.zip
+
+>>>>>>> 097fdd9 (Make demo download checkpoints on first run for deployment)
