@@ -32,7 +32,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @st.cache_resource
 def load_models():
     return load_ensemble(
-        checkpoint_dir="experiments/runs/20260104_062257_deep_ensemble",
+        checkpoint_dir="demo/checkpoints/ensemble",
         device=device,
     )
 
