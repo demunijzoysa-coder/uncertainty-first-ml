@@ -1,9 +1,10 @@
+import os
+from pathlib import Path
+import zipfile
+import urllib.request
+
 import torch
-import numpy as np
-from PIL import Image
-from torchvision import transforms
 from src.models.baseline import build_model
-from src.uncertainty.ensemble import ensemble_predict_proba, predictive_entropy
 
 
 CIFAR10_CLASSES = [
@@ -12,42 +13,47 @@ CIFAR10_CLASSES = [
 ]
 
 
-def load_ensemble(checkpoint_dir, device):
+# Put your GitHub Release direct download URL here:
+ENSEMBLE_ZIP_URL = "PASTE_YOUR_RELEASE_ZIP_URL_HERE"
+
+
+def _download_and_extract(zip_url: str, target_dir: Path):
+    target_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = target_dir / "ensemble_ckpts.zip"
+
+    if not zip_path.exists():
+        urllib.request.urlretrieve(zip_url, zip_path)
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(target_dir)
+
+    # Optional: keep zip to avoid re-download; or delete it
+    # zip_path.unlink(missing_ok=True)
+
+
+def load_ensemble(checkpoint_dir: str, device):
+    checkpoint_dir = Path(checkpoint_dir)
+
+    # If checkpoints are missing, download them
+    expected = [checkpoint_dir / f"model_member_{i}.pt" for i in range(5)]
+    if not all(p.exists() for p in expected):
+        if ENSEMBLE_ZIP_URL == "PASTE_YOUR_RELEASE_ZIP_URL_HERE":
+            raise RuntimeError(
+                "ENSEMBLE_ZIP_URL is not set. Upload checkpoints to GitHub Releases "
+                "and paste the direct download URL into demo/utils.py."
+            )
+        _download_and_extract(ENSEMBLE_ZIP_URL, checkpoint_dir)
+
+    # Load models
     models = []
     for i in range(5):
-        ckpt = torch.load(f"{checkpoint_dir}/model_member_{i}.pt", map_location=device)
+        ckpt_path = checkpoint_dir / f"model_member_{i}.pt"
+        ckpt = torch.load(ckpt_path, map_location=device)
+
         model = build_model("resnet18", num_classes=10, pretrained=False)
         model.load_state_dict(ckpt["model_state_dict"])
         model.to(device)
         model.eval()
         models.append(model)
+
     return models
-
-
-def preprocess_image(img: Image.Image):
-    tfm = transforms.Compose([
-        transforms.Resize((32, 32)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            (0.4914, 0.4822, 0.4465),
-            (0.2023, 0.1994, 0.2010),
-        ),
-    ])
-    return tfm(img).unsqueeze(0)
-
-
-def predict(models, x, device):
-    probs = []
-    with torch.no_grad():
-        for m in models:
-            logits = m(x.to(device))
-            probs.append(torch.softmax(logits, dim=1).cpu().numpy())
-
-    probs = np.stack(probs, axis=0)
-    mean_probs = probs.mean(axis=0)[0]
-
-    pred_idx = int(mean_probs.argmax())
-    confidence = float(mean_probs.max())
-    entropy = float(-np.sum(mean_probs * np.log(mean_probs + 1e-12)))
-
-    return pred_idx, confidence, entropy

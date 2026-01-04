@@ -209,3 +209,7 @@ __marimo__/
 experiments/runs/
 data/
 .venv/
+
+# Demo checkpoints (downloaded at runtime)
+demo/checkpoints/*.zip
+

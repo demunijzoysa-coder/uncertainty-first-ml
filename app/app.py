@@ -1,22 +1,14 @@
-import sys
-from pathlib import Path
-# Add project root to Python path (Streamlit fix)
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT))
-
-
 import streamlit as st
 import torch
 from PIL import Image
 
-from demo.utils import (
-
- 
+from .utils import (
     CIFAR10_CLASSES,
     load_ensemble,
     preprocess_image,
     predict,
 )
+
 
 st.set_page_config(page_title="Self-Aware ML Demo", layout="centered")
 
@@ -31,11 +23,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ---- Load ensemble once ----
 @st.cache_resource
 def load_models():
-   return load_ensemble(
-    checkpoint_dir="demo/checkpoints/ensemble",
-    device=device,
-)
-
+    return load_ensemble(
+        checkpoint_dir="experiments/runs/20260104_062257_deep_ensemble",
+        device=device,
+    )
 
 models = load_models()
 
